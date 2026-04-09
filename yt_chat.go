@@ -121,6 +121,7 @@ type Actions struct {
 	AddChatItemAction struct {
 		Item struct {
 			LiveChatTextMessageRenderer struct {
+				ID      string `json:"id"`
 				Message struct {
 					Runs []Runs `json:"runs"`
 				} `json:"message"`
@@ -158,6 +159,7 @@ type ChatMessagesResponse struct {
 }
 
 type ChatMessage struct {
+	ID         string
 	AuthorID   string
 	AuthorName string
 	Message    string
@@ -248,6 +250,7 @@ func fetchChatMessages(initialContinuationInfo string, ytCfg YtCfg) ([]ChatMessa
 		runs := liveChatTextMessageRenderer.Message.Runs
 		if len(runs) > 0 {
 			chatMessage := ChatMessage{
+				ID:         liveChatTextMessageRenderer.ID,
 				AuthorID:   liveChatTextMessageRenderer.AuthorExternalChannelId,
 				AuthorName: liveChatTextMessageRenderer.AuthorName.SimpleText,
 				Timestamp:  parseMicroSeconds(liveChatTextMessageRenderer.TimestampUsec),
