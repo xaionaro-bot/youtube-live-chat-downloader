@@ -123,6 +123,8 @@ type ChatMessageType int
 const (
 	ChatMessageTypeText              ChatMessageType = iota
 	ChatMessageTypeViewerEngagement
+	ChatMessageTypePaidMessage
+	ChatMessageTypePaidSticker
 )
 
 type Actions struct {
@@ -152,6 +154,37 @@ type Actions struct {
 				} `json:"icon"`
 				TimestampUsec string `json:"timestampUsec"`
 			} `json:"liveChatViewerEngagementMessageRenderer"`
+			LiveChatPaidMessageRenderer struct {
+				ID      string `json:"id"`
+				Message struct {
+					Runs []Runs `json:"runs"`
+				} `json:"message"`
+				AuthorName struct {
+					SimpleText string `json:"simpleText"`
+				} `json:"authorName"`
+				AuthorPhoto struct {
+					Thumbnails []Thumbnail `json:"thumbnails"`
+				} `json:"authorPhoto"`
+				PurchaseAmountText struct {
+					SimpleText string `json:"simpleText"`
+				} `json:"purchaseAmountText"`
+				TimestampUsec           string `json:"timestampUsec"`
+				AuthorExternalChannelId string `json:"authorExternalChannelId"`
+			} `json:"liveChatPaidMessageRenderer"`
+			LiveChatPaidStickerRenderer struct {
+				ID         string `json:"id"`
+				AuthorName struct {
+					SimpleText string `json:"simpleText"`
+				} `json:"authorName"`
+				AuthorPhoto struct {
+					Thumbnails []Thumbnail `json:"thumbnails"`
+				} `json:"authorPhoto"`
+				PurchaseAmountText struct {
+					SimpleText string `json:"simpleText"`
+				} `json:"purchaseAmountText"`
+				TimestampUsec           string `json:"timestampUsec"`
+				AuthorExternalChannelId string `json:"authorExternalChannelId"`
+			} `json:"liveChatPaidStickerRenderer"`
 		} `json:"item"`
 	} `json:"addChatItemAction"`
 }
@@ -177,14 +210,15 @@ type ChatMessagesResponse struct {
 }
 
 type ChatMessage struct {
-	ID         string
-	AuthorID   string
-	AuthorName string
-	Message    string
-	Timestamp  time.Time
-	Thumbnails []Thumbnail
-	Type       ChatMessageType
-	IconType   string
+	ID             string
+	AuthorID       string
+	AuthorName     string
+	Message        string
+	Timestamp      time.Time
+	Thumbnails     []Thumbnail
+	Type           ChatMessageType
+	IconType       string
+	PurchaseAmount string // e.g. "$2.00", "€5.00", "¥500"
 }
 
 var (
@@ -317,6 +351,33 @@ func fetchChatMessages(initialContinuationInfo string, ytCfg YtCfg) ([]ChatMessa
 			chatMessage.Message = runsToText(engagementRenderer.Message.Runs)
 			log.Printf("[YtChat] viewer engagement message: id=%s icon=%s msg=%q",
 				engagementRenderer.ID, engagementRenderer.Icon.IconType, chatMessage.Message)
+			chatMessages = append(chatMessages, chatMessage)
+
+		case action.AddChatItemAction.Item.LiveChatPaidMessageRenderer.ID != "":
+			paidRenderer := action.AddChatItemAction.Item.LiveChatPaidMessageRenderer
+			chatMessage := ChatMessage{
+				ID:             paidRenderer.ID,
+				AuthorID:       paidRenderer.AuthorExternalChannelId,
+				AuthorName:     paidRenderer.AuthorName.SimpleText,
+				Timestamp:      parseMicroSeconds(paidRenderer.TimestampUsec),
+				Thumbnails:     paidRenderer.AuthorPhoto.Thumbnails,
+				Type:           ChatMessageTypePaidMessage,
+				PurchaseAmount: paidRenderer.PurchaseAmountText.SimpleText,
+			}
+			chatMessage.Message = runsToText(paidRenderer.Message.Runs)
+			chatMessages = append(chatMessages, chatMessage)
+
+		case action.AddChatItemAction.Item.LiveChatPaidStickerRenderer.ID != "":
+			stickerRenderer := action.AddChatItemAction.Item.LiveChatPaidStickerRenderer
+			chatMessage := ChatMessage{
+				ID:             stickerRenderer.ID,
+				AuthorID:       stickerRenderer.AuthorExternalChannelId,
+				AuthorName:     stickerRenderer.AuthorName.SimpleText,
+				Timestamp:      parseMicroSeconds(stickerRenderer.TimestampUsec),
+				Thumbnails:     stickerRenderer.AuthorPhoto.Thumbnails,
+				Type:           ChatMessageTypePaidSticker,
+				PurchaseAmount: stickerRenderer.PurchaseAmountText.SimpleText,
+			}
 			chatMessages = append(chatMessages, chatMessage)
 		}
 	}
