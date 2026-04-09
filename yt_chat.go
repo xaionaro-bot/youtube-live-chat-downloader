@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -117,6 +118,13 @@ type Thumbnail struct {
 	Height int    `json:"height,omitempty"`
 }
 
+type ChatMessageType int
+
+const (
+	ChatMessageTypeText              ChatMessageType = iota
+	ChatMessageTypeViewerEngagement
+)
+
 type Actions struct {
 	AddChatItemAction struct {
 		Item struct {
@@ -134,6 +142,16 @@ type Actions struct {
 				TimestampUsec           string `json:"timestampUsec"`
 				AuthorExternalChannelId string `json:"authorExternalChannelId"`
 			} `json:"liveChatTextMessageRenderer"`
+			LiveChatViewerEngagementMessageRenderer struct {
+				ID      string `json:"id"`
+				Message struct {
+					Runs []Runs `json:"runs"`
+				} `json:"message"`
+				Icon struct {
+					IconType string `json:"iconType"`
+				} `json:"icon"`
+				TimestampUsec string `json:"timestampUsec"`
+			} `json:"liveChatViewerEngagementMessageRenderer"`
 		} `json:"item"`
 	} `json:"addChatItemAction"`
 }
@@ -165,6 +183,8 @@ type ChatMessage struct {
 	Message    string
 	Timestamp  time.Time
 	Thumbnails []Thumbnail
+	Type       ChatMessageType
+	IconType   string
 }
 
 var (
@@ -195,6 +215,34 @@ func parseMicroSeconds(timeStampStr string) time.Time {
 	sec := tm / 1000
 	msec := tm % 1000
 	return time.Unix(sec, msec*int64(time.Millisecond))
+}
+
+func runsToText(runs []Runs) string {
+	text := ""
+	for _, run := range runs {
+		if run.Text != "" {
+			text += run.Text
+		} else {
+			if run.Emoji.IsCustomEmoji {
+				numberOfThumbnails := len(run.Emoji.Image.Thumbnails)
+				// Youtube chat has custom emojis which
+				// are small PNG images and cannot be displayed as text.
+				//
+				// These custom emojis are available with their image url.
+				//
+				// Adding some whitespace around custom image URLs
+				// without the whitespace it would be difficult to parse these URLs
+				if numberOfThumbnails > 0 && numberOfThumbnails == 2 {
+					text += " " + run.Emoji.Image.Thumbnails[1].URL + " "
+				} else if numberOfThumbnails == 1 {
+					text += " " + run.Emoji.Image.Thumbnails[0].URL + " "
+				}
+			} else {
+				text += run.Emoji.EmojiId
+			}
+		}
+	}
+	return text
 }
 
 func fetchChatMessages(initialContinuationInfo string, ytCfg YtCfg) ([]ChatMessage, string, int, error) {
@@ -245,42 +293,30 @@ func fetchChatMessages(initialContinuationInfo string, ytCfg YtCfg) ([]ChatMessa
 	chatMessages := []ChatMessage{}
 	for _, action := range actions {
 		liveChatTextMessageRenderer := action.AddChatItemAction.Item.LiveChatTextMessageRenderer
-		// Each chat message is separated into multiple runs.
-		// Iterate through all runs and generate the chat message.
-		runs := liveChatTextMessageRenderer.Message.Runs
-		if len(runs) > 0 {
+		engagementRenderer := action.AddChatItemAction.Item.LiveChatViewerEngagementMessageRenderer
+
+		switch {
+		case len(liveChatTextMessageRenderer.Message.Runs) > 0:
 			chatMessage := ChatMessage{
 				ID:         liveChatTextMessageRenderer.ID,
 				AuthorID:   liveChatTextMessageRenderer.AuthorExternalChannelId,
 				AuthorName: liveChatTextMessageRenderer.AuthorName.SimpleText,
 				Timestamp:  parseMicroSeconds(liveChatTextMessageRenderer.TimestampUsec),
 				Thumbnails: liveChatTextMessageRenderer.AuthorPhoto.Thumbnails,
+				Type:       ChatMessageTypeText,
 			}
-			text := ""
-			for _, run := range runs {
-				if run.Text != "" {
-					text += run.Text
-				} else {
-					if run.Emoji.IsCustomEmoji {
-						numberOfThumbnails := len(run.Emoji.Image.Thumbnails)
-						// Youtube chat has custom emojis which
-						// are small PNG images and cannot be displayed as text.
-						//
-						// These custom emojis are available with their image url.
-						//
-						// Adding some whitespace around custom image URLs
-						// without the whitespace it would be difficult to parse these URLs
-						if numberOfThumbnails > 0 && numberOfThumbnails == 2 {
-							text += " " + run.Emoji.Image.Thumbnails[1].URL + " "
-						} else if numberOfThumbnails == 1 {
-							text += " " + run.Emoji.Image.Thumbnails[0].URL + " "
-						}
-					} else {
-						text += run.Emoji.EmojiId
-					}
-				}
+			chatMessage.Message = runsToText(liveChatTextMessageRenderer.Message.Runs)
+			chatMessages = append(chatMessages, chatMessage)
+
+		case len(engagementRenderer.Message.Runs) > 0:
+			chatMessage := ChatMessage{
+				Timestamp: parseMicroSeconds(engagementRenderer.TimestampUsec),
+				Type:      ChatMessageTypeViewerEngagement,
+				IconType:  engagementRenderer.Icon.IconType,
 			}
-			chatMessage.Message = text
+			chatMessage.Message = runsToText(engagementRenderer.Message.Runs)
+			log.Printf("[YtChat] viewer engagement message: id=%s icon=%s msg=%q",
+				engagementRenderer.ID, engagementRenderer.Icon.IconType, chatMessage.Message)
 			chatMessages = append(chatMessages, chatMessage)
 		}
 	}
